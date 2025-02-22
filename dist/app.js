@@ -92,16 +92,16 @@ cron.schedule('59 23 * * 0', async () => {
             }
         }
         await redisClient.set(PRIZE_POOL_KEY, '0'); // Reset the prize pool
-        console.log('✅ Leaderboard reset and prizes distributed successfully');
+        console.log('Prize pool reset and prizes distributed successfully');
     }
     catch (error) {
-        console.error('❌ Error during scheduled leaderboard reset:', error);
+        console.error('Error during scheduled leaderboard reset:', error);
     }
 });
 // Get Top 100 Leaderboard
 app.get('/leaderboard/top100', async (req, res) => {
     try {
-        const leaderboard = await redisClient.zRangeWithScores(LEADERBOARD_KEY, 0, 99, { REV: true });
+        const leaderboard = await redisClient.zRangeWithScores(LEADERBOARD_KEY, 0, 106, { REV: true });
         // Fetch player details from MySQL for each player in the leaderboard
         const playerIds = leaderboard.map(player => player.value);
         const [players] = await db.query(`SELECT id, name, country, country_code FROM players WHERE id IN (?)`, [playerIds]);
@@ -124,56 +124,6 @@ app.get('/leaderboard/top100', async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
-// Get Grouped Leaderboard
-app.get('/leaderboard/grouped', async (req, res) => {
-    try {
-        // Get the top 100 players from Redis
-        const leaderboard = await redisClient.zRangeWithScores(LEADERBOARD_KEY, 0, 99, { REV: true });
-        // Create a mapping of playerId to score for quick lookup
-        const playerScores = new Map();
-        leaderboard.forEach(player => {
-            playerScores.set(player.value, player.score);
-        });
-        // Fetch player details from MySQL
-        const [players] = await db.query(`SELECT id, name, country AS groupCountry, country_code AS groupCountryCode 
-             FROM players 
-             WHERE id IN (?)`, [Array.from(playerScores.keys())]);
-        // Construct the grouped data structure
-        const groupedData = [];
-        players.forEach(player => {
-            const playerData = {
-                id: player.id,
-                playerName: player.name,
-                country: player.groupCountry,
-                countryCode: player.groupCountryCode,
-                money: playerScores.get(player.id.toString()) || 0
-            };
-            const existingGroup = groupedData.find(group => group.groupCountryCode === player.groupCountryCode);
-            if (existingGroup) {
-                existingGroup.rows.push(playerData);
-            }
-            else {
-                groupedData.push({
-                    groupCountry: player.groupCountry,
-                    groupCountryCode: player.groupCountryCode,
-                    rows: [playerData]
-                });
-            }
-        });
-        // Rank players within each country
-        groupedData.forEach(group => {
-            group.rows.sort((a, b) => b.money - a.money); // Sort by money in descending order
-            group.rows.forEach((player, index) => {
-                player.ranking = index + 1; // Assign ranking
-            });
-        });
-        res.json(groupedData);
-    }
-    catch (error) {
-        console.error('Error fetching grouped leaderboard:', error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
 // Search Player in Leaderboard
 app.get('/leaderboard/search', async (req, res) => {
     try {
@@ -184,18 +134,78 @@ app.get('/leaderboard/search', async (req, res) => {
              WHERE name LIKE ? OR country LIKE ?`, [`%${query}%`, `%${query}%`]);
         if (!players.length)
             return res.json([]);
-        const result = await Promise.all(players.map(async (player) => {
+        const results = await Promise.all(players.map(async (player) => {
             const rank = await redisClient.zRevRank(LEADERBOARD_KEY, player.id.toString());
             const score = await redisClient.zScore(LEADERBOARD_KEY, player.id.toString());
-            return {
-                ranking: rank !== null ? rank + 1 : null,
-                playerName: player.name,
-                country: player.country,
-                countryCode: player.country_code,
-                money: score ? Number(score) : 0
-            };
+            if (rank === null) {
+                console.error(`Inconsistency detected: Player ${player.id} exists in MySQL but not in Redis. Updating Redis...`);
+                await redisClient.zAdd(LEADERBOARD_KEY, [{ score: 0, value: player.id.toString() }]);
+                return {
+                    ranking: null,
+                    playerName: player.name,
+                    country: player.country,
+                    countryCode: player.country_code,
+                    money: 0
+                };
+            }
+            if (rank >= 100) {
+                const startRank = rank - 3;
+                const endRank = rank + 2;
+                const surroundingPlayers = await redisClient.zRangeWithScores(LEADERBOARD_KEY, startRank, endRank, { REV: true });
+                let prevPlayers = [];
+                let nextPlayers = [];
+                surroundingPlayers.forEach((player, index) => {
+                    if (startRank + index < rank && startRank + index >= 100) {
+                        prevPlayers.push({
+                            ranking: startRank + index + 1,
+                            id: player.value,
+                            money: Number(player.score)
+                        });
+                    }
+                    else if (startRank + index > rank && startRank + index >= 100) {
+                        nextPlayers.push({
+                            ranking: startRank + index + 1,
+                            id: player.value,
+                            money: Number(player.score)
+                        });
+                    }
+                });
+                console.log("ret: ", {
+                    ranking: rank + 1,
+                    playerName: player.name,
+                    country: player.country,
+                    countryCode: player.country_code,
+                    money: Number(score),
+                    surroundingPlayers: {
+                        prevPlayers: prevPlayers,
+                        nextPlayers: nextPlayers
+                    }
+                });
+                console.log("prevPlayers: ", prevPlayers);
+                console.log("nextPlayers: ", nextPlayers);
+                return {
+                    ranking: rank + 1,
+                    playerName: player.name,
+                    country: player.country,
+                    countryCode: player.country_code,
+                    money: Number(score),
+                    surroundingPlayers: {
+                        prevPlayers: prevPlayers,
+                        nextPlayers: nextPlayers
+                    }
+                };
+            }
+            else {
+                return {
+                    ranking: rank + 1,
+                    playerName: player.name,
+                    country: player.country,
+                    countryCode: player.country_code,
+                    money: Number(score)
+                };
+            }
         }));
-        return res.json(result);
+        return res.json(results);
     }
     catch (error) {
         console.error('Error searching leaderboard:', error);

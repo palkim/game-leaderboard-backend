@@ -1,0 +1,18 @@
+{
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": false,
+    "editor.tabSize": 2,
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "always", 
+      "source.organizeImports": "always"
+    },
+    "files.exclude": {
+      "node_modules/": true,
+      "*/node_modules/": true,
+      "**/node_modules/": true
+    },
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "prettier.printWidth": 120,
+    "eslint.validate": ["react", "html", "javascript", "typescript"]
+  }
