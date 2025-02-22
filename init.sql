@@ -5,3 +5,5 @@ CREATE TABLE players (
     country_code VARCHAR(10) NOT NULL
 );
 
+ALTER TABLE players ADD FULLTEXT(name);
+

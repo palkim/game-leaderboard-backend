@@ -143,12 +143,16 @@ cron.schedule("59 23 * * 0", async () => {
 });
 
 async function getTopRankingPlayers() {
-  const leaderboard = await redisClient.zRangeWithScores(LEADERBOARD_KEY,0,99,{ REV: true });
+  const leaderboard = await redisClient.zRangeWithScores(
+    LEADERBOARD_KEY,
+    0,
+    99,
+    { REV: true }
+  );
 
   // Fetch player details from MySQL for each player in the leaderboard
   const playerIds = leaderboard.map((player) => player.value);
   const [players] = await db.query<mysql.RowDataPacket[]>(
-    
     `SELECT id, name, country, country_code FROM players WHERE id IN (?)`,
     [playerIds]
   );
@@ -169,9 +173,15 @@ async function getTopRankingPlayers() {
   return result;
 }
 
-async function getPlayerDetails(playerId: string) {
+async function getPlayerDetails(
+  playerId: string
+): Promise<{
+  name: string | null;
+  country: string | null;
+  country_code: string | null;
+}> {
   if (!playerId) {
-    return [];
+    return { name: null, country: null, country_code: null };
   }
 
   // Get player details from MySQL
@@ -181,100 +191,154 @@ async function getPlayerDetails(playerId: string) {
   );
 
   if (player.length === 0) {
-    return [];
+    return { name: null, country: null, country_code: null };
   }
 
-  return player[0];
+  return {
+    name: player[0].name,
+    country: player[0].country,
+    country_code: player[0].country_code,
+  };
+}
+
+async function getSearchResults(players: any[]) {
+  let includedPlayerIds = new Set();
+  const searchResults = await Promise.all(
+    players.map(async (player) => {
+      if (includedPlayerIds.has(player.id.toString())) return null;
+      includedPlayerIds.add(player.id.toString());
+      const rank = await redisClient.zRevRank(
+        LEADERBOARD_KEY,
+        player.id.toString()
+      );
+      const score = await redisClient.zScore(
+        LEADERBOARD_KEY,
+        player.id.toString()
+      );
+
+      if (rank === null) {
+        console.error(
+          `Inconsistency detected: Player ${player.id} exists in User DB but not in Leaderboard.`
+        );
+        return null;
+      }
+      const startRank = rank - 3 < 0 ? 0 : rank - 3;
+      const endRank = rank + 2;
+      const surroundingPlayers = await redisClient.zRangeWithScores(
+        LEADERBOARD_KEY,
+        startRank,
+        endRank,
+        { REV: true }
+      );
+
+      let prevPlayers: any[] = [];
+      let nextPlayers: any[] = [];
+
+      await Promise.all(
+        surroundingPlayers.map(async (player, index) => {
+          const playerDetails = await getPlayerDetails(player.value);
+
+          if (
+            playerDetails.name === null ||
+            playerDetails.country === null ||
+            playerDetails.country_code === null
+          ) {
+            console.error(
+              `Inconsistency detected: Player with ID ${player.value} exists in Leaderboard but corrupted in User DB.`
+            );
+            return;
+          }
+
+          if (startRank + index < rank) {
+            if (!includedPlayerIds.has(player.value)) {
+              includedPlayerIds.add(player.value.toString());
+              prevPlayers.push({
+                ranking: startRank + index + 1,
+                id: player.value,
+                playerName: playerDetails.name,
+                country: playerDetails.country,
+                countryCode: playerDetails.country_code,
+                money: Number(player.score),
+              });
+            }
+          } else if (startRank + index > rank) {
+            if (!includedPlayerIds.has(player.value)) {
+              includedPlayerIds.add(player.value.toString());
+              nextPlayers.push({
+                ranking: startRank + index + 1,
+                id: player.value,
+                playerName: playerDetails.name,
+                country: playerDetails.country,
+                countryCode: playerDetails.country_code,
+                money: Number(player.score),
+              });
+            }
+          }
+        })
+      );
+      return {
+        id: player.id.toString(),
+        ranking: rank + 1,
+        playerName: player.name,
+        country: player.country,
+        countryCode: player.country_code,
+        money: Number(score),
+        surroundingPlayers: {
+          prevPlayers: prevPlayers,
+          nextPlayers: nextPlayers,
+        },
+      };
+    })
+  );
+  return searchResults.filter((player) => player !== null);
 }
 
 app.get(
   "/leaderboard/top-ranking-data",
   async (req: Request, res: Response) => {
     try {
-      const { query } = req.query;
+      const { query, limit, offset } = req.query;
+      const limitNumber = parseInt(limit as string, 10) || 10;
+      const offsetNumber = parseInt(offset as string, 10) || 0;
       const topRankingPlayers = await getTopRankingPlayers();
-      if (!query) return res.json(topRankingPlayers);
+      
+      if (!query) return res.json({ topRankingPlayers, searchResults: null });
 
       const [players] = await db.query<mysql.RowDataPacket[]>(
-        `SELECT id, name, country, country_code FROM players WHERE name LIKE ? OR country LIKE ?`,
-        [`%${query}%`, `%${query}%`]
+        `SELECT id, name, country, country_code
+         FROM players
+         WHERE MATCH(name) AGAINST(? IN NATURAL LANGUAGE MODE)
+         LIMIT ? OFFSET ?`,
+        [query as string, limitNumber, offsetNumber]
       );
 
-      if (!players.length) return res.json(topRankingPlayers);
+      if (!players.length)
+        return res.json({ topRankingPlayers, searchResults: null });
 
-      const searchResults = await Promise.all(
+      const playersWithRanks = await Promise.all(
         players.map(async (player) => {
           const rank = await redisClient.zRevRank(
             LEADERBOARD_KEY,
             player.id.toString()
           );
-          const score = await redisClient.zScore(
-            LEADERBOARD_KEY,
-            player.id.toString()
-          );
-
           if (rank === null) {
             console.error(
-              `Inconsistency detected: Player ${player.id} exists in MySQL but not in Redis. Updating Redis...`
+              `Inconsistency detected: Player ${player.id} exists in User DB but not in Leaderboard.`
             );
             return null;
           }
-          const startRank = rank - 3;
-          const endRank = rank + 2;
-          const surroundingPlayers = await redisClient.zRangeWithScores(
-            LEADERBOARD_KEY,
-            startRank,
-            endRank,
-            { REV: true }
-          );
-          let prevPlayers: any[] = [];
-          let nextPlayers: any[] = [];
-
-          await Promise.all(
-            surroundingPlayers.map(async (player, index) => {
-              const playerDetails = await getPlayerDetails(player.value);
-
-              if (playerDetails.length === 0) {
-                console.error(
-                  `Inconsistency detected: Player with ID ${player.value} exists in Redis but not in MySQL.`
-                );
-                return [];
-              }
-
-              if (startRank + index < rank) {
-                prevPlayers.push({
-                  ranking: startRank + index + 1,
-                  id: player.value,
-                  playerName: playerDetails[0].name,
-                  country: playerDetails[0].country,
-                  countryCode: playerDetails[0].country_code,
-                  money: Number(player.score),
-                });
-              } else if (startRank + index > rank) {
-                nextPlayers.push({
-                  ranking: startRank + index + 1,
-                  id: player.value,
-                  playerName: playerDetails[0].name,
-                  country: playerDetails[0].country,
-                  countryCode: playerDetails[0].country_code,
-                  money: Number(player.score),
-                });
-              }
-            })
-          );
           return {
-            ranking: rank + 1,
-            playerName: player.name,
-            country: player.country,
-            countryCode: player.country_code,
-            money: Number(score),
-            surroundingPlayers: {
-              prevPlayers: prevPlayers,
-              nextPlayers: nextPlayers,
-            },
+            ...player,
+            rank: rank + 1,
           };
         })
       );
+      
+      const filteredPlayers = playersWithRanks.filter(
+        (player) => player !== null
+      );
+      filteredPlayers.sort((a, b) => a.rank - b.rank);
+      const searchResults = await getSearchResults(filteredPlayers);
 
       res.json({ topRankingPlayers, searchResults });
     } catch (error) {
@@ -285,114 +349,6 @@ app.get(
     }
   }
 );
-
-// Search Player in Leaderboard
-app.get("/leaderboard/search", async (req: Request, res: Response) => {
-  try {
-    const { query } = req.query;
-    if (!query)
-      return res.status(400).json({ error: "Query parameter is required" });
-
-    const [players] = await db.query<mysql.RowDataPacket[]>(
-      `SELECT id, name, country, country_code FROM players 
-             WHERE name LIKE ? OR country LIKE ?`,
-      [`%${query}%`, `%${query}%`]
-    );
-
-    if (!players.length) return res.json([]);
-
-    const results = await Promise.all(
-      players.map(async (player) => {
-        const rank = await redisClient.zRevRank(
-          LEADERBOARD_KEY,
-          player.id.toString()
-        );
-        const score = await redisClient.zScore(
-          LEADERBOARD_KEY,
-          player.id.toString()
-        );
-
-        if (rank === null) {
-          console.error(
-            `Inconsistency detected: Player ${player.id} exists in MySQL but not in Redis. Updating Redis...`
-          );
-
-          await redisClient.zAdd(LEADERBOARD_KEY, [
-            { score: 0, value: player.id.toString() },
-          ]);
-
-          return {
-            ranking: null,
-            playerName: player.name,
-            country: player.country,
-            countryCode: player.country_code,
-            money: 0,
-          };
-        } else {
-          const startRank = rank - 3;
-          const endRank = rank + 2;
-          const surroundingPlayers = await redisClient.zRangeWithScores(
-            LEADERBOARD_KEY,
-            startRank,
-            endRank,
-            { REV: true }
-          );
-          let prevPlayers: any[] = [];
-          let nextPlayers: any[] = [];
-
-          await Promise.all(
-            surroundingPlayers.map(async (player, index) => {
-              const playerDetails = await getPlayerDetails(player.value);
-
-              if (playerDetails.length === 0) {
-                console.error(
-                  `Inconsistency detected: Player with ID ${player.value} exists in Redis but not in MySQL.`
-                );
-                return [];
-              }
-
-              if (startRank + index < rank) {
-                prevPlayers.push({
-                  ranking: startRank + index + 1,
-                  id: player.value,
-                  playerName: playerDetails[0].name,
-                  country: playerDetails[0].country,
-                  countryCode: playerDetails[0].country_code,
-                  money: Number(player.score),
-                });
-              } else if (startRank + index > rank) {
-                nextPlayers.push({
-                  ranking: startRank + index + 1,
-                  id: player.value,
-                  playerName: playerDetails[0].name,
-                  country: playerDetails[0].country,
-                  countryCode: playerDetails[0].country_code,
-                  money: Number(player.score),
-                });
-              }
-            })
-          );
-          return {
-            ranking: rank + 1,
-            playerName: player.name,
-            country: player.country,
-            countryCode: player.country_code,
-            money: Number(score),
-            surroundingPlayers: {
-              prevPlayers: prevPlayers,
-              nextPlayers: nextPlayers,
-            },
-          };
-        }
-      })
-    );
-
-    return res.json(results);
-  } catch (error) {
-    console.error("Error searching leaderboard:", error);
-    return res.status(500).json({ error: "Internal Server Error" });
-  }
-});
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
