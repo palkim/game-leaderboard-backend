@@ -18,7 +18,6 @@ Panteon Leaderboard Backend is an application that tracks player earnings and ma
 - **MySQL**: Database management
 - **Redis**: Caching for fast data access
 - **Node-Cron**: For scheduled tasks
-- **CORS**: Allowing requests from different origins
 
 ## Installation
 
