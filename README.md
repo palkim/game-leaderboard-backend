@@ -10,7 +10,6 @@ Panteon Leaderboard Backend is an application that tracks player earnings and ma
 - Update player earnings
 - Reset weekly leaderboard
 - Search and rank players
-- CORS support for requests from different origins
 
 ## Technologies
 
