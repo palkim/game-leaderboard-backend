@@ -17,7 +17,8 @@
     "express": "^4.21.2",
     "mysql2": "^3.12.0",
     "node-cron": "^3.0.3",
-    "redis": "^4.7.0"
+    "redis": "^4.7.0",
+    "winston": "^3.3.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

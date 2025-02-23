@@ -4,6 +4,7 @@ import { createClient } from "redis";
 import dotenv from "dotenv";
 import cron from "node-cron";
 import cors from "cors";
+import winston from 'winston'; // Winston kütüphanesini içe aktar
 
 dotenv.config();
 
@@ -13,11 +14,14 @@ const LEADERBOARD_KEY = "game_leaderboard";
 const PRIZE_POOL_KEY = "leaderboard_prize_pool";
 
 // MySQL Connection
-const db = await mysql.createConnection({
+const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASS,
   database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
 });
 
 // Redis Connection
@@ -33,6 +37,14 @@ app.use(
 );
 
 app.use(express.json());
+
+const logger = winston.createLogger({
+  level: 'error',
+  format: winston.format.json(),
+  transports: [
+      new winston.transports.File({ filename: 'error.log' }),
+  ],
+});
 
 // Add Earnings to Leaderboard and Prize Pool
 app.post("/leaderboard/earn", async (req: Request, res: Response) => {
@@ -55,9 +67,14 @@ app.post("/leaderboard/earn", async (req: Request, res: Response) => {
     await redisClient.zIncrBy(LEADERBOARD_KEY, amount, playerId.toString());
     await redisClient.incrByFloat(PRIZE_POOL_KEY, amount * 0.02);
     return res.json({ message: "Earnings updated successfully" });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error updating earnings:", error);
-    return res.status(500).json({ error: "Internal Server Error" });
+    logger.error(`Error message: ${(error)?.message || "Unknown error"}, Error stack: ${(error)?.stack || "No stack trace"}`);
+    
+    return res.status(500).json({
+      error: "Internal Server Error",
+      message: `Error updating earnings: ${(error)?.message || "Unknown error"}`
+  });
   }
 });
 
@@ -65,7 +82,7 @@ app.post("/leaderboard/earn", async (req: Request, res: Response) => {
 app.post("/player/create", async (req: Request, res: Response) => {
   try {
     const { name, country, countryCode } = req.body;
-    if (!name || !country || !countryCode) {
+    if(!name?.trim() || !country?.trim() || !countryCode?.trim()) {
       return res.status(400).json({ error: "Missing required player details" });
     }
 
@@ -85,17 +102,22 @@ app.post("/player/create", async (req: Request, res: Response) => {
       [name, country, countryCode]
     );
 
-    const playerId = (result as mysql.ResultSetHeader).insertId;
+    const playerId = (result as any).insertId;
 
     // Initialize earnings in Redis
     await redisClient.zAdd(LEADERBOARD_KEY, [
       { score: 0, value: playerId.toString() },
     ]);
 
-    return res.json({ message: "Player created successfully", playerId });
-  } catch (error) {
-    console.error("Error creating player:", error);
-    return res.status(500).json({ error: "Internal Server Error" });
+    return res.status(201).json({ message: "Player created successfully", playerId });
+  } catch (error: any) {
+    console.error("Error creating player: ", error);
+    logger.error(`Error message: ${error?.message || "Unknown error"}, Error stack: ${error?.stack || "No stack trace"}`);
+
+    return res.status(500).json({
+      error: "Internal Server Error",
+      message: `Error creating player: ${error?.message || "Unknown error"}`
+    });
   }
 });
 
@@ -137,8 +159,9 @@ cron.schedule("59 23 * * 0", async () => {
     await redisClient.set(PRIZE_POOL_KEY, "0"); // Reset the prize pool
 
     console.log("Prize pool reset and prizes distributed successfully");
-  } catch (error) {
-    console.error("Error during scheduled leaderboard reset:", error);
+  } catch (error: any) {
+    console.error("Error during scheduled leaderboard reset: ", error);
+    logger.error(`Error message: ${error?.message || "Unknown error"}, Error stack: ${error?.stack || "No stack trace"}`);
   }
 });
 
@@ -220,6 +243,7 @@ async function getSearchResults(players: any[]) {
         console.error(
           `Inconsistency detected: Player ${player.id} exists in User DB but not in Leaderboard.`
         );
+        logger.error(`Inconsistency detected: Player ${player.id} exists in User DB but not in Leaderboard.`);
         return null;
       }
       const startRank = rank - 3 < 0 ? 0 : rank - 3;
@@ -246,6 +270,7 @@ async function getSearchResults(players: any[]) {
             console.error(
               `Inconsistency detected: Player with ID ${player.value} exists in Leaderboard but corrupted in User DB.`
             );
+            logger.error(`Inconsistency detected: Player with ID ${player.value} exists in Leaderboard but corrupted in User DB.`);
             return;
           }
 
@@ -319,6 +344,7 @@ app.get(
             console.error(
               `Inconsistency detected: Player ${player.id} exists in User DB but not in Leaderboard.`
             );
+            logger.error(`Inconsistency detected: Player ${player.id} exists in User DB but not in Leaderboard.`);
             return null;
           }
           return {
@@ -335,8 +361,9 @@ app.get(
       const searchResults = await getSearchResults(filteredPlayers);
 
       res.json({ topRankingPlayers, searchResults });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error getting top ranking data:", error);
+      logger.error(`Error message: ${error?.message || "Unknown error"}, Error stack: ${error?.stack || "No stack trace"}`);
       return res
         .status(500)
         .json({ error: "Internal Server Error", details: error });
@@ -344,6 +371,15 @@ app.get(
   }
 );
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+async function startServer() {
+  try {
+    await db.query("SELECT 1"); // Ensure MySQL is connected
+    await redisClient.ping(); // Ensure Redis is connected
+    app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+  } catch (error) {
+    console.error("Failed to start server:", error);
+    process.exit(1);
+  }
+}
+
+startServer();
