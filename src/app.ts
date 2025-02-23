@@ -31,8 +31,9 @@ await redisClient.connect();
 // Use CORS middleware before defining routes
 app.use(
   cors({
-    origin: "http://localhost:3000", // Allow requests from this origin
-    credentials: true, // Allow credentials to be sent
+    origin: "*", // Allow requests from this origin
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
   })
 );
 
@@ -175,6 +176,9 @@ async function getTopRankingPlayers() {
 
   // Fetch player details from MySQL for each player in the leaderboard
   const playerIds = leaderboard.map((player) => player.value);
+  if (playerIds.length === 0) {
+    return []; // Return an empty array if there are no player IDs
+  }
   const [players] = await db.query<mysql.RowDataPacket[]>(
     `SELECT id, name, country, country_code FROM players WHERE id IN (?)`,
     [playerIds]
