@@ -8,7 +8,7 @@ import cors from "cors";
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT ?? 4000;
 const LEADERBOARD_KEY = "game_leaderboard";
 const PRIZE_POOL_KEY = "leaderboard_prize_pool";
 
