@@ -32,7 +32,7 @@ Leaderboard Backend is an application that tracks player earnings and manages le
 1. **Clone the Repository**:
    ```bash
    git clone https://github.com/palkim/game-leaderboard-backend.git
-   cd panteon-leaderboard-backend
+   cd game-leaderboard-backend
    ```
 
 2. **Install Dependencies**:
