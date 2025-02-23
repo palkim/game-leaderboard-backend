@@ -1,8 +1,8 @@
-# Panteon Leaderboard Backend
+# Leaderboard Backend
 
 ## Project Description
 
-Panteon Leaderboard Backend is an application that tracks player earnings and manages leaderboards. It uses MySQL for storing player information and Redis for caching and quick access. Additionally, it manages weekly prize pools and updates player rankings.
+Leaderboard Backend is an application that tracks player earnings and manages leaderboards. It uses MySQL for storing player information and Redis for caching and quick access. Additionally, it manages weekly prize pools and updates player rankings.
 
 ## Features
 
