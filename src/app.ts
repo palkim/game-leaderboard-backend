@@ -297,19 +297,13 @@ app.get(
   "/leaderboard/top-ranking-data",
   async (req: Request, res: Response) => {
     try {
-      const { query, limit, offset } = req.query;
-      const limitNumber = parseInt(limit as string, 10) || 10;
-      const offsetNumber = parseInt(offset as string, 10) || 0;
+      const { query } = req.query;
       const topRankingPlayers = await getTopRankingPlayers();
-      
       if (!query) return res.json({ topRankingPlayers, searchResults: null });
 
       const [players] = await db.query<mysql.RowDataPacket[]>(
-        `SELECT id, name, country, country_code
-         FROM players
-         WHERE MATCH(name) AGAINST(? IN NATURAL LANGUAGE MODE)
-         LIMIT ? OFFSET ?`,
-        [query as string, limitNumber, offsetNumber]
+        `SELECT id, name, country, country_code FROM players WHERE name LIKE ?`,
+        [`%${query}%`]
       );
 
       if (!players.length)
@@ -333,11 +327,11 @@ app.get(
           };
         })
       );
-      
       const filteredPlayers = playersWithRanks.filter(
         (player) => player !== null
       );
       filteredPlayers.sort((a, b) => a.rank - b.rank);
+      
       const searchResults = await getSearchResults(filteredPlayers);
 
       res.json({ topRankingPlayers, searchResults });
