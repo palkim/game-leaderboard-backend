@@ -73,11 +73,3 @@ Panteon Leaderboard Backend is an application that tracks player earnings and ma
 
 - To create a new player, send a POST request to `/player/create` with the required player details (name, country, countryCode).
 - To update player earnings, send a POST request to `/leaderboard/earn` with the playerId and amount.
-
-## License
-
-This project is licensed under the MIT License. See the LICENSE file for more details.
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes.
