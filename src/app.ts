@@ -4,7 +4,7 @@ import { createClient } from "redis";
 import dotenv from "dotenv";
 import cron from "node-cron";
 import cors from "cors";
-import winston from 'winston'; // Winston kütüphanesini içe aktar
+import winston from 'winston';
 
 dotenv.config();
 
@@ -13,7 +13,6 @@ const PORT = process.env.PORT ?? 4000;
 const LEADERBOARD_KEY = "game_leaderboard";
 const PRIZE_POOL_KEY = "leaderboard_prize_pool";
 
-// MySQL Connection
 const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -24,14 +23,12 @@ const db = mysql.createPool({
   queueLimit: 0,
 });
 
-// Redis Connection
 const redisClient = createClient({ url: process.env.REDIS_URL });
 await redisClient.connect();
 
-// Use CORS middleware before defining routes
 app.use(
   cors({
-    origin: "*", // Allow requests from this origin
+    origin: "*",
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
   })
@@ -51,7 +48,8 @@ const logger = winston.createLogger({
 app.post("/leaderboard/earn", async (req: Request, res: Response) => {
   try {
     const { playerId, amount } = req.body;
-    if (!playerId || typeof amount !== "number") {
+    const parsedAmount = parseFloat(amount);
+    if (!playerId || isNaN(parsedAmount)) {
       return res.status(400).json({ error: "Invalid playerId or amount" });
     }
 
@@ -62,11 +60,12 @@ app.post("/leaderboard/earn", async (req: Request, res: Response) => {
     );
 
     if (players.length === 0) {
+      logger.error(`Player not found: ${playerId}`);
       return res.status(404).json({ error: "Player not found" });
     }
 
-    await redisClient.zIncrBy(LEADERBOARD_KEY, amount, playerId.toString());
-    await redisClient.incrByFloat(PRIZE_POOL_KEY, amount * 0.02);
+    await redisClient.zIncrBy(LEADERBOARD_KEY, parsedAmount, playerId.toString());
+    await redisClient.incrByFloat(PRIZE_POOL_KEY, parsedAmount * 0.02);
     return res.json({ message: "Earnings updated successfully" });
   } catch (error: any) {
     console.error("Error updating earnings:", error);
@@ -94,6 +93,7 @@ app.post("/player/create", async (req: Request, res: Response) => {
     );
 
     if (existingPlayers.length > 0) {
+      logger.error(`Player already exists: ${name} ${country} ${countryCode}`);
       return res.status(409).json({ error: "Player already exists" });
     }
 
