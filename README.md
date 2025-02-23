@@ -33,7 +33,7 @@ Panteon Leaderboard Backend is an application that tracks player earnings and ma
 
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/yourusername/panteon-leaderboard-backend.git
+   git clone https://github.com/palkim/game-leaderboard-backend.git
    cd panteon-leaderboard-backend
    ```
 
@@ -45,7 +45,12 @@ Panteon Leaderboard Backend is an application that tracks player earnings and ma
 3. **Set Up Environment Variables**:
    Create a `.env` file in the root directory and add your environment variables (e.g., database credentials).
 
-4. **Initialize the Database**:
+4. **Run mysql and redis containers for running the project on your local**:
+   ```bash
+   docker-compose up
+   ```
+
+5. **Initialize the Database**:
    Run the SQL script `init.sql` to create the necessary tables:
    ```sql
    -- Run init.sql to set up the database
@@ -59,7 +64,7 @@ Panteon Leaderboard Backend is an application that tracks player earnings and ma
    CREATE INDEX idx_players_name ON players(name);
    ```
 
-5. **Start the Application**:
+6. **Start the Application**:
    ```bash
    npm run start
    ```
