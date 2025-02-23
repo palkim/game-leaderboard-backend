@@ -379,7 +379,7 @@ async function startServer() {
   try {
     await db.query("SELECT 1"); // Ensure MySQL is connected
     await redisClient.ping(); // Ensure Redis is connected
-    app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+    app.listen(Number(PORT), '0.0.0.0',() => console.log(`Server is running on port ${PORT}`));
   } catch (error) {
     console.error("Failed to start server:", error);
     process.exit(1);
