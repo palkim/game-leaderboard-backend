@@ -1,4 +1,4 @@
-import express, { Request, Response } from "express";
+import express, { NextFunction, Request, Response } from "express";
 import mysql from "mysql2/promise";
 import { createClient } from "redis";
 import dotenv from "dotenv";
@@ -21,9 +21,16 @@ const db = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  connectTimeout: 60000
 });
 
-const redisClient = createClient({ url: process.env.REDIS_URL });
+const redisClient = createClient({ 
+  url: process.env.REDIS_URL,
+  socket: {
+    reconnectStrategy: (retries) => Math.min(retries * 100, 5000),
+    keepAlive: 5000
+  }
+});
 await redisClient.connect();
 
 app.use(
@@ -54,10 +61,16 @@ app.post("/leaderboard/earn", async (req: Request, res: Response) => {
     }
 
     // Check if player exists in MySQL
-    const [players] = await db.query<mysql.RowDataPacket[]>(
-      "SELECT id FROM players WHERE id = ?",
-      [playerId]
-    );
+    const connection = await db.getConnection();
+    let players: mysql.RowDataPacket[] = [];
+    try {
+      [players] = await connection.query<mysql.RowDataPacket[]>(
+        "SELECT id FROM players WHERE id = ?",
+        [playerId]
+      );
+    } finally {
+      connection.release();
+    }
 
     if (players.length === 0) {
       logger.error(`Player not found: ${playerId}`);
@@ -87,10 +100,16 @@ app.post("/player/create", async (req: Request, res: Response) => {
     }
 
     // Check if player exists in MySQL
-    const [existingPlayers] = await db.query<mysql.RowDataPacket[]>(
-      "SELECT id FROM players WHERE name = ? AND country = ? AND country_code = ?",
-      [name, country, countryCode]
-    );
+    let connection = await db.getConnection();
+    let existingPlayers: mysql.RowDataPacket[] = [];
+    try {
+      [existingPlayers] = await connection.query<mysql.RowDataPacket[]>(
+        "SELECT id FROM players WHERE name = ? AND country = ? AND country_code = ?",
+        [name, country, countryCode]
+      );
+    } finally {
+      connection.release();
+    }
 
     if (existingPlayers.length > 0) {
       logger.error(`Player already exists: ${name} ${country} ${countryCode}`);
@@ -98,10 +117,16 @@ app.post("/player/create", async (req: Request, res: Response) => {
     }
 
     // Insert player into MySQL
-    const [result] = await db.query(
-      "INSERT INTO players (name, country, country_code) VALUES (?, ?, ?)",
-      [name, country, countryCode]
-    );
+    connection = await db.getConnection();
+    let result: mysql.RowDataPacket[] = [];
+    try {
+      [result] = await connection.query<mysql.RowDataPacket[]>(
+        "INSERT INTO players (name, country, country_code) VALUES (?, ?, ?)",
+        [name, country, countryCode]
+      );
+    } finally {
+      connection.release();
+    }
 
     const playerId = (result as any).insertId;
 
@@ -179,10 +204,16 @@ async function getTopRankingPlayers() {
   if (playerIds.length === 0) {
     return []; // Return an empty array if there are no player IDs
   }
-  const [players] = await db.query<mysql.RowDataPacket[]>(
-    `SELECT id, name, country, country_code FROM players WHERE id IN (?)`,
-    [playerIds]
-  );
+  const connection = await db.getConnection();
+  let players: mysql.RowDataPacket[] = [];
+  try {
+    [players] = await connection.query<mysql.RowDataPacket[]>(
+      `SELECT id, name, country, country_code FROM players WHERE id IN (?)`,
+      [playerIds]
+    );
+  } finally {
+    connection.release();
+  }
 
   // Map the leaderboard data to include player details and ranking
   const result = leaderboard.map((player, index) => {
@@ -212,10 +243,16 @@ async function getPlayerDetails(
   }
 
   // Get player details from MySQL
-  const [player] = await db.query<mysql.RowDataPacket[]>(
-    "SELECT name, country, country_code FROM players WHERE id = ?",
-    [playerId]
-  );
+  const connection = await db.getConnection();
+  let player: mysql.RowDataPacket[] = [];
+  try {
+    [player] = await connection.query<mysql.RowDataPacket[]>(
+      "SELECT name, country, country_code FROM players WHERE id = ?",
+      [playerId]
+    );
+  } finally {
+    connection.release();
+  }
 
   if (player.length === 0) {
     return { name: null, country: null, country_code: null };
@@ -330,10 +367,16 @@ app.get(
       const topRankingPlayers = await getTopRankingPlayers();
       if (!query) return res.json({ topRankingPlayers, searchResults: null });
 
-      const [players] = await db.query<mysql.RowDataPacket[]>(
-        `SELECT id, name, country, country_code FROM players WHERE name LIKE ?`,
-        [`%${query}%`]
-      );
+      const connection = await db.getConnection();
+      let players: mysql.RowDataPacket[] = [];
+      try {
+        [players] = await connection.query<mysql.RowDataPacket[]>(
+          `SELECT id, name, country, country_code FROM players WHERE name LIKE ?`,
+          [`%${query}%`]
+        );
+      } finally {
+        connection.release();
+      }
 
       if (!players.length)
         return res.json({ topRankingPlayers, searchResults: null });
@@ -374,6 +417,12 @@ app.get(
     }
   }
 );
+
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error("Unhandled Error:", err);
+  res.status(500).json({ error: "Internal Server Error", message: err.message, stack: err.stack });
+});
+
 
 async function startServer() {
   try {
