@@ -28,10 +28,21 @@ const redisClient = createClient({
   url: process.env.REDIS_URL,
   socket: {
     reconnectStrategy: (retries) => Math.min(retries * 100, 5000),
-    keepAlive: 5000
+    keepAlive: 5000,
+    connectTimeout: 60000
   }
 });
-await redisClient.connect();
+
+redisClient.on('error', (err) => {
+  console.error('Redis Client Error:', err);
+  logger.error(`Redis Client Error: ${err.message}`);
+});
+
+await redisClient.connect().catch((err) => {
+  console.error('Redis Connection Error:', err);
+  logger.error(`Redis Connection Error: ${err.message}`);
+  process.exit(1);
+});
 
 app.use(
   cors({
